@@ -1,18 +1,21 @@
 # ⚡ Riftwalk - CS2 Trading Extension
 
-> Free Chrome extension that adds instant pricing, float values, Doppler phase detection, pattern tiers, sticker values, and trade offer comparison directly to your Steam inventory.
+> Free browser extension that adds instant pricing, float values, Doppler phase detection, pattern tiers, sticker values, and trade offer comparison directly to your Steam inventory.
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.1.0-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
-![Chrome](https://img.shields.io/badge/platform-Chrome%20%7C%20Edge%20%7C%20Brave-orange)
+![Chrome](https://img.shields.io/badge/platform-Chrome%20%7C%20Firefox%20%7C%20Edge%20%7C%20Brave%20%7C%20Opera-orange)
 
 ---
 
 ## 🔥 Features
 
 ### 💰 Pricing
+- **Two pricing modes:**
+  - **PricEmpire + CSFloat** — Buff163/Skins.com prices + phase-specific Doppler pricing (requires free API keys)
+  - **Skinport** — No API key required, includes built-in Doppler phase pricing
 - **33,000+ items** priced from Buff163 and Skins.com via PricEmpire
-- **Doppler phase-specific pricing** via CSFloat API
+- **Doppler phase-specific pricing** via CSFloat API or Skinport
 - **Click any price** to open the Buff163 listing
 - **Total inventory value** bar with item count
 
@@ -23,6 +26,10 @@
 - **Pattern tiers** - Max Pink, Max Blue, Fire & Ice (1st-10th Max), Crimson Web
 - **Exterior labels** (FN/MW/FT/WW/BS) on every item
 - **Rarity border glow** matching item quality
+
+### 🔍 Inspect in Browser
+- **3D skin viewer** — click "Inspect in Browser" to open your exact skin in a 3D viewer with stickers and wear
+- Works on any item with an inspect link
 
 ### 🏷️ Stickers & Patches
 - **Hover popup** showing all applied stickers, patches, and charms
@@ -73,9 +80,12 @@
 ## 🚀 Installation
 
 ### Chrome Web Store
-1. Visit the [Chrome Web Store listing](#) (coming soon)
+1. Visit the [Chrome Web Store listing](https://chromewebstore.google.com/detail/riftwalk-cs2-trading-enha/ckfkgceckiojoblhpiimilfldomfgakl)
 2. Click "Add to Chrome"
-3. Done!
+
+### Firefox Add-ons
+1. Visit the [Firefox Add-ons listing](https://addons.mozilla.org/addon/riftwalk-cs2-trading-enhancer/)
+2. Click "Add to Firefox"
 
 ### Manual Install (Developer Mode)
 1. Download or clone this repo
@@ -89,11 +99,32 @@
 
 ## ⚙️ Setup
 
+### Option 1: Skinport Mode (No API key needed)
+1. Click the Riftwalk icon in your browser toolbar
+2. Toggle the pricing mode switch to **Skinport**
+3. Click **Save & Fetch Prices**
+4. Done — prices load with zero setup!
+
+### Option 2: PricEmpire + CSFloat Mode (More accurate)
 1. Get a free API key at [pricempire.com/settings/developer](https://pricempire.com/settings/developer)
 2. Click the Riftwalk icon in your browser toolbar
 3. Paste your API key in the **Settings** tab
 4. Click **Save & Fetch Prices**
 5. (Optional) Add a CSFloat API key from [csfloat.com/profile](https://csfloat.com/profile) for Doppler phase pricing
+
+---
+
+## 📋 Changelog
+
+### v1.1.0
+- **Doppler Pricing Fix** — Correct phase-specific prices for all knife types (Butterfly, Karambit, etc.)
+- **Skinport Pricing Mode** — New toggle in settings. Get prices with zero API keys required. Includes built-in Doppler phase pricing.
+- **Inspect in Browser** — New button opens a 3D skin viewer with your exact skin, stickers, and wear.
+- **Price Sanity Filter** — Fixed absurd pricing on items like Operation Hydra Case Key.
+- **Currency Fix** — Doppler prices now correctly convert to your selected currency (EUR, GBP, CNY).
+
+### v1.0.0
+- Initial release
 
 ---
 
@@ -104,7 +135,7 @@ riftwalk/
 ├── manifest.json          # Extension manifest (MV3)
 ├── content.js             # Main content script - inventory labeling, trade offers
 ├── pageworld.js           # MAIN world script - access to Steam's JS globals
-├── background.js          # Service worker - PricEmpire API, CSFloat proxy
+├── background.js          # Service worker - PricEmpire/Skinport API, CSFloat proxy
 ├── skin_data.js           # Pattern databases - fade, blue gem, doppler, marble fade
 ├── inspect_decoder.js     # Bundled CS2 inspect link decoder
 ├── popup.html             # Extension popup UI
@@ -118,7 +149,7 @@ riftwalk/
 ## 🔒 Privacy
 
 - **No data collection** - everything runs locally in your browser
-- **No servers** - API calls go directly to PricEmpire, CSFloat, and Steam
+- **No servers** - API calls go directly to PricEmpire, Skinport, CSFloat, and Steam
 - **No tracking** inside the extension
 - Full privacy policy at [rftwlk.com/privacy](https://rftwlk.com/privacy)
 
@@ -126,7 +157,7 @@ riftwalk/
 
 ## 🤝 Contributing
 
-Found a bug? Have a feature idea? 
+Found a bug? Have a feature idea?
 
 - Open an [issue](../../issues)
 - Join our [Discord](https://discord.gg/6MFAmebrHW)
