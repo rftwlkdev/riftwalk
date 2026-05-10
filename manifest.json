@@ -62,7 +62,8 @@
     "*://inspect.pricempire.com/*",
     "*://api.csfloat.com/*",
     "*://csfloat.com/*",
-    "*://api.steampowered.com/*"
+    "*://api.steampowered.com/*",
+    "*://api.skinport.com/*"
   ],
   "short_name": "Riftwalk"
 }

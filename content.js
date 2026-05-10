@@ -9,6 +9,19 @@
   if (window.__riftwalker_loaded) return;
   window.__riftwalker_loaded = true;
 
+  // Firefox MV3 doesn't support "world": "MAIN" in manifest — inject pageworld.js manually
+  if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
+    try {
+      const pwUrl = chrome.runtime.getURL('pageworld.js');
+      if (!document.querySelector(`script[src="${pwUrl}"]`)) {
+        const s = document.createElement('script');
+        s.src = pwUrl;
+        s.onload = () => s.remove();
+        (document.head || document.documentElement).appendChild(s);
+      }
+    } catch(e) {}
+  }
+
   let IS_INVENTORY  = /\/inventory/.test(location.pathname);
   let IS_TRADEOFFER = /\/tradeoffer\//.test(location.pathname);
   let IS_TRADEOFFERS_LIST = /\/tradeoffers\/?($|\?|sent)/.test(location.pathname);
@@ -20,20 +33,36 @@
   let debounce = null, floatQueue = [], floatBusy = false;
   let currentOwnerSteamId = null, inventoryLoading = false;
 
-  const CURR_SYM = { USD: '$', EUR: '€', GBP: '£', CNY: '¥' };
-  function sym() { return CURR_SYM[settings.currency] || '$'; }
+  const CURR_SYM = { USD: '$', EUR: '€', GBP: '£', CNY: '¥', CAD: 'C$', AUD: 'A$', CHF: 'Fr', SEK: 'kr', PLN: 'zł', BRL: 'R$', TRY: '₺' };
+  // CSFloat returns USD only — convert to user's currency
+  const USD_RATES = { USD: 1, EUR: 0.85, GBP: 0.73, CNY: 6.80 };
+  function convertFromUSD(cents) {
+    const cur = settings.currency || 'USD';
+    const rate = USD_RATES[cur];
+    return rate && rate !== 1 ? Math.round(cents * rate) : cents;
+  }
+  function sym() {
+    const cur = settings.pricingMode === 'skinport' ? (settings.spCurrency || 'USD') : (settings.currency || 'USD');
+    return CURR_SYM[cur] || '$';
+  }
   function fmt(c) { return (!c || c <= 0) ? null : sym() + (c / 100).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); }
   function getPrice(name, aid) {
     if (aid && dopplerPrices.has(aid)) return fmt(dopplerPrices.get(aid));
     if (!name) return null;
     const e = priceMap[name]; if (!e) return null;
-    return fmt(settings.priceSource === 'skins' ? (e.skins || e.buff) : (e.buff || e.skins));
+    const cents = settings.priceSource === 'skins' ? (e.skins || e.buff) : (e.buff || e.skins);
+    if (cents > 1000000 && /\bKey$/i.test(name)) return null;
+    return fmt(cents);
   }
   function getCents(name, aid) {
     if (aid && dopplerPrices.has(aid)) return dopplerPrices.get(aid);
     if (!name) return 0;
     const e = priceMap[name]; if (!e) return 0;
-    return (settings.priceSource === 'skins' ? (e.skins || e.buff) : (e.buff || e.skins)) || 0;
+    let cents = (settings.priceSource === 'skins' ? (e.skins || e.buff) : (e.buff || e.skins)) || 0;
+    // Sanity cap: keys/tools should never exceed $100, skip obviously broken prices
+    if (cents > 10000 && /\bKey$|\bKey\b.*Tag$|Capsule$|Package$|Pass$|Pin$|Sticker\s*\|/.test(name) === false && cents > 50000000) cents = 0;
+    if (cents > 1000000 && /\bKey$/i.test(name)) cents = 0; // Keys over $10K are broken data
+    return cents;
   }
 
   // ── Doppler phase detection from icon_url ─────────────────
@@ -143,7 +172,7 @@
             if (phase) {
               dopplerPhases.set(aid, { phase });
               newPhases++;
-              if (!dopplerPrices.has(aid)) fetchDopplerPrice(aid, name, phase);
+              if (!dopplerPrices.has(aid)) fetchDopplerPrice(aid, name, phase, data.paintindex);
             }
           }
         }
@@ -163,7 +192,7 @@
                 const dname = invDescs.get(aid)?.market_hash_name || nameCache.get(aid) || '';
                 if (isDopplerItem(dname) && result.paintindex && !dopplerPhases.has(aid)) {
                   const phase = PAINT_PHASES.get(result.paintindex);
-                  if (phase) { dopplerPhases.set(aid, { phase }); newPhases++; if (!dopplerPrices.has(aid)) fetchDopplerPrice(aid, dname, phase); }
+                  if (phase) { dopplerPhases.set(aid, { phase }); newPhases++; if (!dopplerPrices.has(aid)) fetchDopplerPrice(aid, dname, phase, result.paintindex); }
                   else if (isDP) console.log(`[Riftwalk] paintindex ${result.paintindex} not in PAINT_PHASES map`);
                 }
               } else if (isDP) {
@@ -417,8 +446,15 @@
   }
 
   // ── Doppler pricing via CSFloat listings ──────────────────
+  // Phase name → all possible paint_indices for CSFloat query
+  const PHASE_ALL_INDICES = {};
+  PAINT_PHASES.forEach((phase, pi) => {
+    if (!PHASE_ALL_INDICES[phase]) PHASE_ALL_INDICES[phase] = [];
+    PHASE_ALL_INDICES[phase].push(pi);
+  });
+
   const dopplerPriceCache = new Map(); // "weapon|phase" -> price in cents
-  async function fetchDopplerPrice(aid, marketHashName, phase) {
+  async function fetchDopplerPrice(aid, marketHashName, phase, actualPaintIndex) {
     if (settings.enableDopplerPrices === false || dopplerPrices.has(aid)) return;
     // Check weapon+phase cache first — no need to re-fetch same combo
     const cacheKey = `${marketHashName}|${phase}`;
@@ -429,38 +465,79 @@
       if (el) { const tag = el.querySelector('.rw-price'); if (tag) { tag.textContent = fmt(dopplerPriceCache.get(cacheKey)); tag.className = 'rw-price csfloat'; } }
       return;
     }
+
+    // Skinport mode: look up from cached Skinport Doppler data (no API call needed)
+    if (settings.pricingMode === 'skinport') {
+      try {
+        const spData = await chrome.storage.local.get(['rw_skinport_dopplers']);
+        const spDopplers = spData.rw_skinport_dopplers || {};
+        const spKey = `${marketHashName}|${phase}`;
+        if (spDopplers[spKey]) {
+          const price = spDopplers[spKey];
+          dopplerPrices.set(aid, price);
+          dopplerPriceCache.set(cacheKey, price);
+          console.log(`[Riftwalk] Doppler ${phase} price from Skinport: ${fmt(price)}`);
+          saveDopplerCache();
+          const el = document.getElementById(`730_2_${aid}`) || document.getElementById(`730_16_${aid}`) || document.getElementById(`item730_2_${aid}`) || document.getElementById(`item730_16_${aid}`);
+          if (el) { const tag = el.querySelector('.rw-price'); if (tag) { tag.textContent = fmt(price); tag.className = 'rw-price csfloat'; } }
+          dopplerPhases.forEach((dp, otherId) => {
+            if (otherId !== aid && dp.phase === phase && !dopplerPrices.has(otherId)) {
+              const otherDesc = invDescs.get(otherId) || { market_hash_name: nameCache.get(otherId) };
+              if (otherDesc?.market_hash_name === marketHashName) dopplerPrices.set(otherId, price);
+            }
+          });
+          processItems();
+        } else {
+          console.log(`[Riftwalk] No Skinport Doppler price for ${spKey}`);
+        }
+      } catch(e) { console.warn('[Riftwalk] Skinport Doppler lookup error:', e); }
+      return;
+    }
+
+    // PricEmpire + CSFloat mode: query CSFloat API
     try {
-      const params = new URLSearchParams({ market_hash_name: marketHashName, sort_by: 'lowest_price', limit: '1', type: 'buy_now' });
-      if (phase && PHASE_PAINT_INDEX[phase]) {
-        params.set('paint_index', PHASE_PAINT_INDEX[phase].toString());
-      }
-      const url = `https://csfloat.com/api/v1/listings?${params}`;
       const settingsData = await chrome.storage.local.get(['rw_settings']);
       const csfloatKey = settingsData.rw_settings?.csfloatKey || '';
       const headers = {};
       if (csfloatKey) headers['Authorization'] = csfloatKey;
 
-      const r = await chrome.runtime.sendMessage({ type: 'FETCH', url, options: { headers } });
-      if (r?.success && r.data) {
-        const listings = Array.isArray(r.data) ? r.data : (Array.isArray(r.data.data) ? r.data.data : []);
-        if (listings.length > 0 && listings[0].price) {
-          dopplerPrices.set(aid, listings[0].price);
-          dopplerPriceCache.set(cacheKey, listings[0].price);
-          console.log(`[Riftwalk] Doppler ${phase || 'generic'} price: ${fmt(listings[0].price)}`);
+      // If we have the actual paintindex, use it directly. Otherwise try all known indices for this phase.
+      const indicesToTry = actualPaintIndex ? [actualPaintIndex] : (PHASE_ALL_INDICES[phase] || [PHASE_PAINT_INDEX[phase]]);
+      
+      let bestPrice = null;
+      for (const pi of indicesToTry) {
+        if (!pi) continue;
+        const params = new URLSearchParams({ market_hash_name: marketHashName, sort_by: 'lowest_price', limit: '1', type: 'buy_now', paint_index: pi.toString() });
+        const url = `https://csfloat.com/api/v1/listings?${params}`;
+        const r = await chrome.runtime.sendMessage({ type: 'FETCH', url, options: { headers } });
+        if (r?.success && r.data) {
+          const listings = Array.isArray(r.data) ? r.data : (Array.isArray(r.data.data) ? r.data.data : []);
+          if (listings.length > 0 && listings[0].price) {
+            // CSFloat returns USD cents — convert to user's currency
+            bestPrice = convertFromUSD(listings[0].price);
+            console.log(`[Riftwalk] Doppler ${phase} price via pi=${pi}: ${fmt(bestPrice)}`);
+            break; // Found a listing, use it
+          }
+        }
+      }
+
+      if (bestPrice) {
+          dopplerPrices.set(aid, bestPrice);
+          dopplerPriceCache.set(cacheKey, bestPrice);
+          console.log(`[Riftwalk] Doppler ${phase || 'generic'} final price: ${fmt(bestPrice)}`);
           saveDopplerCache();
           const el = document.getElementById(`730_2_${aid}`) || document.getElementById(`730_16_${aid}`) || document.getElementById(`item730_2_${aid}`) || document.getElementById(`item730_16_${aid}`);
-          if (el) { const tag = el.querySelector('.rw-price'); if (tag) { tag.textContent = fmt(listings[0].price); tag.className = 'rw-price csfloat'; } }
+          if (el) { const tag = el.querySelector('.rw-price'); if (tag) { tag.textContent = fmt(bestPrice); tag.className = 'rw-price csfloat'; } }
           // Apply cached price to all other items with same weapon+phase
           dopplerPhases.forEach((dp, otherId) => {
             if (otherId !== aid && dp.phase === phase && !dopplerPrices.has(otherId)) {
               const otherDesc = invDescs.get(otherId) || { market_hash_name: nameCache.get(otherId) };
               if (otherDesc?.market_hash_name === marketHashName) {
-                dopplerPrices.set(otherId, listings[0].price);
+                dopplerPrices.set(otherId, bestPrice);
               }
             }
           });
           processItems();
-        }
       }
     } catch(e) { console.warn('[Riftwalk] Doppler price error:', e); }
   }
@@ -472,10 +549,26 @@
     if (!target) { setTimeout(setupDetailPanelObserver, 2000); return; }
     new MutationObserver(() => {
       // Only process if the panel content actually changed
-      const panel = document.querySelector('#iteminfo0[style*="display: block"], #iteminfo0:not([style*="display: none"])');
+      const panel = document.querySelector('#iteminfo0[style*="display: block"]') || document.querySelector('#iteminfo1[style*="display: block"]');
       if (!panel) return;
       const panelText = panel.querySelector('h1 span')?.textContent || '';
-      if (panelText === lastPanelHtml) return; // same item still showing
+      if (!panelText) return; // panel not rendered yet, wait for next mutation
+      if (panelText === lastPanelHtml) {
+        // Same item — but still inject button if missing (handles timing issues)
+        if (!panel.querySelector('.rw-inspect-browser')) {
+          const il = panel.querySelectorAll('a[href*="csgo_econ_action_preview"]');
+          if (il.length > 0) {
+            const link = il[0].getAttribute('href') || '';
+            const url = `https://3d.skinport.com/?link=${encodeURIComponent(link)}`;
+            const b = document.createElement('a'); b.href = url; b.target = '_blank'; b.className = 'rw-inspect-browser'; b.textContent = 'Inspect in Browser';
+            b.style.cssText = 'display:inline-block;margin-left:8px;padding:4px 12px;background:rgba(102,192,244,.1);border:1px solid rgba(102,192,244,.25);border-radius:4px;color:#66c0f4;font-size:12px;cursor:pointer;text-decoration:none;transition:all .15s;vertical-align:middle';
+            b.onmouseenter = () => { b.style.background = 'rgba(102,192,244,.2)'; b.style.borderColor = '#66c0f4'; };
+            b.onmouseleave = () => { b.style.background = 'rgba(102,192,244,.1)'; b.style.borderColor = 'rgba(102,192,244,.25)'; };
+            il[0].parentElement.insertBefore(b, il[0].nextSibling);
+          }
+        }
+        return;
+      }
       lastPanelHtml = panelText;
 
       const activeItem = document.querySelector('.item.app730.activeInfo');
@@ -483,6 +576,27 @@
       const aid = getAssetId(activeItem);
       if (!aid) return;
       const itemName = getItemName(activeItem) || '';
+
+      // Inject "Inspect in Browser" button (always, regardless of cache)
+      const inspectLinks = panel.querySelectorAll('a[href*="csgo_econ_action_preview"]');
+      // Always remove old button first (panel gets reused between items)
+      const oldBtn = panel.querySelector('.rw-inspect-browser');
+      if (oldBtn) oldBtn.remove();
+      if (inspectLinks.length > 0) {
+        const inspectLink = inspectLinks[0].getAttribute('href') || '';
+        const viewerUrl = `https://3d.skinport.com/?link=${encodeURIComponent(inspectLink)}`;
+        const btn = document.createElement('a');
+        btn.href = viewerUrl;
+        btn.target = '_blank';
+        btn.className = 'rw-inspect-browser';
+        btn.textContent = 'Inspect in Browser';
+        btn.style.cssText = 'display:inline-block;margin-left:8px;padding:4px 12px;background:rgba(102,192,244,.1);border:1px solid rgba(102,192,244,.25);border-radius:4px;color:#66c0f4;font-size:12px;cursor:pointer;text-decoration:none;transition:all .15s;vertical-align:middle';
+        btn.onmouseenter = () => { btn.style.background = 'rgba(102,192,244,.2)'; btn.style.borderColor = '#66c0f4'; };
+        btn.onmouseleave = () => { btn.style.background = 'rgba(102,192,244,.1)'; btn.style.borderColor = 'rgba(102,192,244,.25)'; };
+        const steamBtn = inspectLinks[0];
+        steamBtn.parentElement.insertBefore(btn, steamBtn.nextSibling);
+      }
+
       const needsPhase = isDopplerItem(itemName) && !dopplerPhases.has(aid);
       if (floatCache.has(aid) && !needsPhase) return;
       if (itemName && panelText && !panelText.includes(itemName.split('|')[0].trim().replace('★ ', ''))) return;
@@ -523,7 +637,7 @@
                     const b = document.createElement('div'); b.className = 'rw-phase';
                     b.style.color = getPhaseColor(phase, itemName); b.textContent = phase; activeItem.appendChild(b);
                   }
-                  if (!dopplerPrices.has(aid)) fetchDopplerPrice(aid, itemName, phase);
+                  if (!dopplerPrices.has(aid)) fetchDopplerPrice(aid, itemName, phase, result.paintindex);
                 }
               }
               return;

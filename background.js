@@ -34,8 +34,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       chrome.storage.local.get([CACHE_KEY, 'rw_settings']).then(r => {
         const entry = r[CACHE_KEY];
         const s = r.rw_settings || {};
+        const mode = s.pricingMode || 'pricempire';
         sendResponse({
           hasKey:      !!s.pricempireKey,
+          hasSkinport: mode === 'skinport',
+          mode:        mode,
           lastUpdated: entry?.ts || null,
           cacheAge:    entry?.ts ? Math.round((Date.now() - entry.ts) / 60000) : null,
           itemCount:   entry?.data ? Object.keys(entry.data).length : 0,
@@ -87,11 +90,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 async function fetchAndCachePrices() {
   const data = await chrome.storage.local.get(['rw_settings']);
   const settings = data.rw_settings || {};
+  const mode = settings.pricingMode || 'pricempire';
+
+  if (mode === 'skinport') {
+    return fetchSkinportPrices(settings);
+  }
+  return fetchPricempirePrices(settings);
+}
+
+async function fetchPricempirePrices(settings) {
   const apiKey = settings.pricempireKey || '';
   const currency = settings.currency || 'USD';
   if (!apiKey) throw new Error('No PricEmpire API key configured');
 
-  console.log('[Riftwalk] Fetching prices...');
+  console.log('[Riftwalk] Fetching PricEmpire prices...');
   const url = `https://api.pricempire.com/v4/trader/items/prices`
     + `?app_id=730&sources=buff163,skins`
     + `&currency=${encodeURIComponent(currency)}`
@@ -118,8 +130,101 @@ async function fetchAndCachePrices() {
     if (entry.buff || entry.skins) priceMap[name] = entry;
   }
 
-  console.log(`[Riftwalk] Cached ${Object.keys(priceMap).length} prices`);
-  await chrome.storage.local.set({ [CACHE_KEY]: { data: priceMap, ts: Date.now() } });
+  console.log(`[Riftwalk] Cached ${Object.keys(priceMap).length} PricEmpire prices`);
+  await chrome.storage.local.set({ [CACHE_KEY]: { data: priceMap, ts: Date.now(), mode: 'pricempire' } });
+
+  chrome.tabs.query({ url: '*://steamcommunity.com/*' }, tabs => {
+    for (const tab of tabs) chrome.tabs.sendMessage(tab.id, { type: 'PRICES_UPDATED' }).catch(() => {});
+  });
+  return priceMap;
+}
+
+// ── Skinport ────────────────────────────────────────────────
+async function fetchSkinportPrices(settings) {
+  const currency = settings.spCurrency || 'USD';
+  console.log(`[Riftwalk] Fetching Skinport prices (${currency})...`);
+
+  // Fetch both endpoints in parallel
+  const [itemsRes, oosRes] = await Promise.all([
+    fetch(`https://api.skinport.com/v1/items?app_id=730&currency=${encodeURIComponent(currency)}&tradable=0`, { headers: { 'Accept-Encoding': 'br' } }),
+    fetch(`https://api.skinport.com/v1/sales/out-of-stock?app_id=730&currency=${encodeURIComponent(currency)}`, { headers: { 'Accept-Encoding': 'br' } }).catch(() => null),
+  ]);
+
+  if (!itemsRes.ok) {
+    const text = await itemsRes.text().catch(() => '');
+    throw new Error(`Skinport ${itemsRes.status}: ${text.slice(0, 200)}`);
+  }
+
+  const rawData = await itemsRes.json();
+  if (!Array.isArray(rawData)) throw new Error(`Unexpected Skinport data: ${typeof rawData}`);
+
+  const priceMap = {};
+  const dopplerVersions = {}; // "market_hash_name|phase" -> price in cents
+
+  for (const item of rawData) {
+    const name = item.market_hash_name;
+    if (!name) continue;
+
+    const price = item.min_price || item.suggested_price;
+    if (!price || price <= 0) continue;
+    const cents = Math.round(price * 100);
+
+    // Doppler items with version field get stored separately for phase-specific pricing
+    if (item.version && /Phase|Ruby|Sapphire|Black Pearl|Emerald/i.test(item.version)) {
+      const versionKey = `${name}|${item.version}`;
+      dopplerVersions[versionKey] = cents;
+    }
+
+    // Always store/update the base price — keep the cheapest we've seen
+    if (!priceMap[name]) {
+      priceMap[name] = { buff: cents, skins: cents };
+    } else {
+      if (cents < priceMap[name].buff) {
+        priceMap[name] = { buff: cents, skins: cents };
+      }
+    }
+  }
+
+  // Merge out-of-stock data for items missing from main endpoint
+  if (oosRes && oosRes.ok) {
+    try {
+      const oosData = await oosRes.json();
+      if (Array.isArray(oosData)) {
+        let oosAdded = 0;
+        for (const item of oosData) {
+          const name = item.market_hash_name;
+          if (!name) continue;
+          const price = item.avg_sale_price || item.suggested_price;
+          if (!price || price <= 0) continue;
+          const cents = Math.round(price * 100);
+
+          // Doppler versions from out-of-stock
+          if (item.version && /Phase|Ruby|Sapphire|Black Pearl|Emerald/i.test(item.version)) {
+            const versionKey = `${name}|${item.version}`;
+            if (!dopplerVersions[versionKey]) {
+              dopplerVersions[versionKey] = cents;
+              oosAdded++;
+            }
+          }
+
+          // Fill in missing base prices
+          if (!priceMap[name]) {
+            priceMap[name] = { buff: cents, skins: cents };
+            oosAdded++;
+          }
+        }
+        console.log(`[Riftwalk] Added ${oosAdded} prices from out-of-stock endpoint`);
+      }
+    } catch (e) {
+      console.warn('[Riftwalk] Out-of-stock merge failed:', e.message);
+    }
+  }
+
+  console.log(`[Riftwalk] Cached ${Object.keys(priceMap).length} Skinport prices + ${Object.keys(dopplerVersions).length} Doppler versions`);
+  await chrome.storage.local.set({
+    [CACHE_KEY]: { data: priceMap, ts: Date.now(), mode: 'skinport' },
+    'rw_skinport_dopplers': dopplerVersions,
+  });
 
   chrome.tabs.query({ url: '*://steamcommunity.com/*' }, tabs => {
     for (const tab of tabs) chrome.tabs.sendMessage(tab.id, { type: 'PRICES_UPDATED' }).catch(() => {});
@@ -219,7 +324,9 @@ async function maybeRefresh() {
   const result = await chrome.storage.local.get([CACHE_KEY, 'rw_settings']);
   const entry = result[CACHE_KEY];
   const s = result.rw_settings || {};
-  if (s.pricempireKey && (!entry?.ts || Date.now() - entry.ts > CACHE_TTL_MS))
+  const mode = s.pricingMode || 'pricempire';
+  const hasConfig = mode === 'skinport' || s.pricempireKey;
+  if (hasConfig && (!entry?.ts || Date.now() - entry.ts > CACHE_TTL_MS))
     fetchAndCachePrices().catch(e => console.warn('[Riftwalk] Auto-refresh failed:', e.message));
 }
 
