@@ -10,17 +10,18 @@
   window.__riftwalker_loaded = true;
 
   // Firefox MV3 doesn't support "world": "MAIN" in manifest — inject pageworld.js manually
-  if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
-    try {
-      const pwUrl = chrome.runtime.getURL('pageworld.js');
+  // Detect Firefox by checking for browser.runtime.getBrowserInfo which Chrome doesn't have
+  try {
+    if (typeof browser !== 'undefined' && typeof browser.runtime?.getBrowserInfo === 'function') {
+      const pwUrl = browser.runtime.getURL('pageworld.js');
       if (!document.querySelector(`script[src="${pwUrl}"]`)) {
         const s = document.createElement('script');
         s.src = pwUrl;
         s.onload = () => s.remove();
         (document.head || document.documentElement).appendChild(s);
       }
-    } catch(e) {}
-  }
+    }
+  } catch(e) {}
 
   let IS_INVENTORY  = /\/inventory/.test(location.pathname);
   let IS_TRADEOFFER = /\/tradeoffer\//.test(location.pathname);
@@ -547,6 +548,27 @@
   function setupDetailPanelObserver() {
     const target = document.querySelector('.inventory_page_right') || document.querySelector('#iteminfo0')?.parentElement;
     if (!target) { setTimeout(setupDetailPanelObserver, 2000); return; }
+
+    // Initial injection for the first item that's auto-selected on page load
+    function tryInitialInject() {
+      const p = document.querySelector('#iteminfo0[style*="display: block"]') || document.querySelector('#iteminfo1[style*="display: block"]');
+      if (p && !p.querySelector('.rw-inspect-browser')) {
+        const il = p.querySelectorAll('a[href*="csgo_econ_action_preview"]');
+        if (il.length > 0) {
+          const link = il[0].getAttribute('href') || '';
+          const url = `https://3d.skinport.com/?link=${encodeURIComponent(link)}`;
+          const btn = document.createElement('a'); btn.href = url; btn.target = '_blank'; btn.className = 'rw-inspect-browser'; btn.textContent = 'Inspect in Browser';
+          btn.style.cssText = 'display:inline-block;margin-left:8px;padding:4px 12px;background:rgba(102,192,244,.1);border:1px solid rgba(102,192,244,.25);border-radius:4px;color:#66c0f4;font-size:12px;cursor:pointer;text-decoration:none;transition:all .15s;vertical-align:middle';
+          btn.onmouseenter = () => { btn.style.background = 'rgba(102,192,244,.2)'; btn.style.borderColor = '#66c0f4'; };
+          btn.onmouseleave = () => { btn.style.background = 'rgba(102,192,244,.1)'; btn.style.borderColor = 'rgba(102,192,244,.25)'; };
+          il[0].parentElement.insertBefore(btn, il[0].nextSibling);
+          return true;
+        }
+      }
+      return false;
+    }
+    setTimeout(() => { if (!tryInitialInject()) setTimeout(() => { if (!tryInitialInject()) setTimeout(tryInitialInject, 1000); }, 500); }, 1000);
+
     new MutationObserver(() => {
       // Only process if the panel content actually changed
       const panel = document.querySelector('#iteminfo0[style*="display: block"]') || document.querySelector('#iteminfo1[style*="display: block"]');
@@ -565,37 +587,60 @@
             b.onmouseenter = () => { b.style.background = 'rgba(102,192,244,.2)'; b.style.borderColor = '#66c0f4'; };
             b.onmouseleave = () => { b.style.background = 'rgba(102,192,244,.1)'; b.style.borderColor = 'rgba(102,192,244,.25)'; };
             il[0].parentElement.insertBefore(b, il[0].nextSibling);
+          } else {
+            // Retry after delay
+            setTimeout(() => {
+              const p = document.querySelector('#iteminfo0[style*="display: block"]') || document.querySelector('#iteminfo1[style*="display: block"]');
+              if (p && !p.querySelector('.rw-inspect-browser')) {
+                const il2 = p.querySelectorAll('a[href*="csgo_econ_action_preview"]');
+                if (il2.length > 0) {
+                  const link2 = il2[0].getAttribute('href') || '';
+                  const url2 = `https://3d.skinport.com/?link=${encodeURIComponent(link2)}`;
+                  const b2 = document.createElement('a'); b2.href = url2; b2.target = '_blank'; b2.className = 'rw-inspect-browser'; b2.textContent = 'Inspect in Browser';
+                  b2.style.cssText = 'display:inline-block;margin-left:8px;padding:4px 12px;background:rgba(102,192,244,.1);border:1px solid rgba(102,192,244,.25);border-radius:4px;color:#66c0f4;font-size:12px;cursor:pointer;text-decoration:none;transition:all .15s;vertical-align:middle';
+                  b2.onmouseenter = () => { b2.style.background = 'rgba(102,192,244,.2)'; b2.style.borderColor = '#66c0f4'; };
+                  b2.onmouseleave = () => { b2.style.background = 'rgba(102,192,244,.1)'; b2.style.borderColor = 'rgba(102,192,244,.25)'; };
+                  il2[0].parentElement.insertBefore(b2, il2[0].nextSibling);
+                }
+              }
+            }, 500);
           }
         }
         return;
       }
       lastPanelHtml = panelText;
 
+      // Inject "Inspect in Browser" button — with retry for late-rendering inspect links
+      function injectInspectButton(p) {
+        const il = p.querySelectorAll('a[href*="csgo_econ_action_preview"]');
+        const old = p.querySelector('.rw-inspect-browser');
+        if (old) old.remove();
+        if (il.length > 0) {
+          const link = il[0].getAttribute('href') || '';
+          const url = `https://3d.skinport.com/?link=${encodeURIComponent(link)}`;
+          const btn = document.createElement('a');
+          btn.href = url; btn.target = '_blank'; btn.className = 'rw-inspect-browser'; btn.textContent = 'Inspect in Browser';
+          btn.style.cssText = 'display:inline-block;margin-left:8px;padding:4px 12px;background:rgba(102,192,244,.1);border:1px solid rgba(102,192,244,.25);border-radius:4px;color:#66c0f4;font-size:12px;cursor:pointer;text-decoration:none;transition:all .15s;vertical-align:middle';
+          btn.onmouseenter = () => { btn.style.background = 'rgba(102,192,244,.2)'; btn.style.borderColor = '#66c0f4'; };
+          btn.onmouseleave = () => { btn.style.background = 'rgba(102,192,244,.1)'; btn.style.borderColor = 'rgba(102,192,244,.25)'; };
+          il[0].parentElement.insertBefore(btn, il[0].nextSibling);
+          return true;
+        }
+        return false;
+      }
+      if (!injectInspectButton(panel)) {
+        // Inspect link not in DOM yet — retry after Steam finishes rendering
+        setTimeout(() => {
+          const p2 = document.querySelector('#iteminfo0[style*="display: block"]') || document.querySelector('#iteminfo1[style*="display: block"]');
+          if (p2) injectInspectButton(p2);
+        }, 500);
+      }
+
       const activeItem = document.querySelector('.item.app730.activeInfo');
       if (!activeItem) return;
       const aid = getAssetId(activeItem);
       if (!aid) return;
       const itemName = getItemName(activeItem) || '';
-
-      // Inject "Inspect in Browser" button (always, regardless of cache)
-      const inspectLinks = panel.querySelectorAll('a[href*="csgo_econ_action_preview"]');
-      // Always remove old button first (panel gets reused between items)
-      const oldBtn = panel.querySelector('.rw-inspect-browser');
-      if (oldBtn) oldBtn.remove();
-      if (inspectLinks.length > 0) {
-        const inspectLink = inspectLinks[0].getAttribute('href') || '';
-        const viewerUrl = `https://3d.skinport.com/?link=${encodeURIComponent(inspectLink)}`;
-        const btn = document.createElement('a');
-        btn.href = viewerUrl;
-        btn.target = '_blank';
-        btn.className = 'rw-inspect-browser';
-        btn.textContent = 'Inspect in Browser';
-        btn.style.cssText = 'display:inline-block;margin-left:8px;padding:4px 12px;background:rgba(102,192,244,.1);border:1px solid rgba(102,192,244,.25);border-radius:4px;color:#66c0f4;font-size:12px;cursor:pointer;text-decoration:none;transition:all .15s;vertical-align:middle';
-        btn.onmouseenter = () => { btn.style.background = 'rgba(102,192,244,.2)'; btn.style.borderColor = '#66c0f4'; };
-        btn.onmouseleave = () => { btn.style.background = 'rgba(102,192,244,.1)'; btn.style.borderColor = 'rgba(102,192,244,.25)'; };
-        const steamBtn = inspectLinks[0];
-        steamBtn.parentElement.insertBefore(btn, steamBtn.nextSibling);
-      }
 
       const needsPhase = isDopplerItem(itemName) && !dopplerPhases.has(aid);
       if (floatCache.has(aid) && !needsPhase) return;
