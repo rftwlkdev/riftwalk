@@ -116,14 +116,14 @@
 
 ## 📋 Changelog
 
-### v1.1.0
+### v1.1
 - **Doppler Pricing Fix** — Correct phase-specific prices for all knife types (Butterfly, Karambit, etc.)
 - **Skinport Pricing Mode** — New toggle in settings. Get prices with zero API keys required. Includes built-in Doppler phase pricing.
 - **Inspect in Browser** — New button opens a 3D skin viewer with your exact skin, stickers, and wear.
 - **Price Sanity Filter** — Fixed absurd pricing on items like Operation Hydra Case Key.
 - **Currency Fix** — Doppler prices now correctly convert to your selected currency (EUR, GBP, CNY).
 
-### v1.0.0
+### v1.0
 - Initial release
 
 ---
