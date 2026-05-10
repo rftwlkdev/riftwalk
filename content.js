@@ -9,19 +9,22 @@
   if (window.__riftwalker_loaded) return;
   window.__riftwalker_loaded = true;
 
-  // Firefox MV3 doesn't support "world": "MAIN" in manifest — inject pageworld.js manually
-  // Detect Firefox by checking for browser.runtime.getBrowserInfo which Chrome doesn't have
-  try {
-    if (typeof browser !== 'undefined' && typeof browser.runtime?.getBrowserInfo === 'function') {
-      const pwUrl = browser.runtime.getURL('pageworld.js');
-      if (!document.querySelector(`script[src="${pwUrl}"]`)) {
-        const s = document.createElement('script');
-        s.src = pwUrl;
-        s.onload = () => s.remove();
-        (document.head || document.documentElement).appendChild(s);
+  // Firefox MV3 doesn't support "world": "MAIN" — inject pageworld.js if it hasn't loaded
+  // Wait briefly then check if pageworld set up its divs; if not, inject manually
+  setTimeout(() => {
+    try {
+      if (!document.getElementById('rw-asset-dump') && !document.getElementById('rw-viewer')) {
+        const pwUrl = (typeof browser !== 'undefined' ? browser : chrome).runtime.getURL('pageworld.js');
+        if (!document.querySelector(`script[src="${pwUrl}"]`)) {
+          const s = document.createElement('script');
+          s.src = pwUrl;
+          s.onload = () => s.remove();
+          (document.head || document.documentElement).appendChild(s);
+          console.log('[Riftwalk] Injected pageworld.js manually');
+        }
       }
-    }
-  } catch(e) {}
+    } catch(e) {}
+  }, 1500);
 
   let IS_INVENTORY  = /\/inventory/.test(location.pathname);
   let IS_TRADEOFFER = /\/tradeoffer\//.test(location.pathname);

@@ -144,10 +144,11 @@ async function fetchSkinportPrices(settings) {
   const currency = settings.spCurrency || 'USD';
   console.log(`[Riftwalk] Fetching Skinport prices (${currency})...`);
 
-  // Fetch both endpoints in parallel
-  const [itemsRes, oosRes] = await Promise.all([
+  // Fetch all three endpoints in parallel
+  const [itemsRes, oosRes, histRes] = await Promise.all([
     fetch(`https://api.skinport.com/v1/items?app_id=730&currency=${encodeURIComponent(currency)}&tradable=0`, { headers: { 'Accept-Encoding': 'br' } }),
     fetch(`https://api.skinport.com/v1/sales/out-of-stock?app_id=730&currency=${encodeURIComponent(currency)}`, { headers: { 'Accept-Encoding': 'br' } }).catch(() => null),
+    fetch(`https://api.skinport.com/v1/sales/history?app_id=730&currency=${encodeURIComponent(currency)}`, { headers: { 'Accept-Encoding': 'br' } }).catch(() => null),
   ]);
 
   if (!itemsRes.ok) {
@@ -217,6 +218,42 @@ async function fetchSkinportPrices(settings) {
       }
     } catch (e) {
       console.warn('[Riftwalk] Out-of-stock merge failed:', e.message);
+    }
+  }
+
+  // Merge sales history for items still missing (covers rare items like AWP Gungnir FN)
+  if (histRes && histRes.ok) {
+    try {
+      const histData = await histRes.json();
+      if (Array.isArray(histData)) {
+        let histAdded = 0;
+        for (const item of histData) {
+          const name = item.market_hash_name;
+          if (!name) continue;
+          // Use 30d avg first, fallback to 90d avg
+          const price = item.last_30_days?.avg || item.last_90_days?.avg;
+          if (!price || price <= 0) continue;
+          const cents = Math.round(price * 100);
+
+          // Doppler versions from history
+          if (item.version && /Phase|Ruby|Sapphire|Black Pearl|Emerald/i.test(item.version)) {
+            const versionKey = `${name}|${item.version}`;
+            if (!dopplerVersions[versionKey]) {
+              dopplerVersions[versionKey] = cents;
+              histAdded++;
+            }
+          }
+
+          // Fill in missing base prices
+          if (!priceMap[name]) {
+            priceMap[name] = { buff: cents, skins: cents };
+            histAdded++;
+          }
+        }
+        console.log(`[Riftwalk] Added ${histAdded} prices from sales history endpoint`);
+      }
+    } catch (e) {
+      console.warn('[Riftwalk] Sales history merge failed:', e.message);
     }
   }
 
