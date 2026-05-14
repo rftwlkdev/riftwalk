@@ -1,8 +1,8 @@
 # ⚡ Riftwalk - CS2 Trading Extension
 
-> Free browser extension that adds instant pricing, float values, Doppler phase detection, pattern tiers, sticker values, and trade offer comparison directly to your Steam inventory.
+> Free browser extension that adds instant pricing, float values, Doppler phase detection, pattern tiers, sticker values, trade offer comparison, and case opening stats directly to your Steam inventory.
 
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.2-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Chrome](https://img.shields.io/badge/platform-Chrome%20%7C%20Firefox%20%7C%20Edge%20%7C%20Brave%20%7C%20Opera-orange)
 
@@ -31,8 +31,18 @@
 - **3D skin viewer** — click "Inspect in Browser" to open your exact skin in a 3D viewer with stickers and wear
 - Works on any item with an inspect link
 
+### 📦 Case Opening Stats
+- **Track your case opening history** with rarity breakdown
+- **Gold rate** — how many cases per knife/gloves
+- **Best pull** with current market price
+- **Money spent** — case cost + key cost calculated automatically
+- **Compare your luck** against expected drop odds (1:385 gold, 1:156 covert, etc.)
+- **Auto-scan history** with one click, 3.5s between requests
+- **Draggable stats panel** — move it anywhere on screen
+- **Separate capsule tracking** — sticker capsules don't count as cases
+
 ### 🏷️ Stickers & Patches
-- **Hover popup** showing all applied stickers, patches, and charms
+- **Hover popup** showing all applied stickers, patches, and charms with prices
 - **Individual prices** for each sticker with total value
 - **Combined popup** with float, seed, and pattern info
 
@@ -61,7 +71,7 @@
 ### ⚡ Performance
 - **Smart batching** for large inventories (1000+ items)
 - **Visible-page-only** processing
-- **CSFloat price cache** by weapon + phase
+- **Direct item link support** — floats load when navigating via shared inventory links
 
 ---
 
@@ -86,6 +96,10 @@
 ### Firefox Add-ons
 1. Visit the [Firefox Add-ons listing](https://addons.mozilla.org/addon/riftwalk-cs2-trading-enhancer/)
 2. Click "Add to Firefox"
+
+### Edge Add-ons
+1. Visit the Edge Add-ons listing
+2. Click "Get"
 
 ### Manual Install (Developer Mode)
 1. Download or clone this repo
@@ -116,14 +130,21 @@
 
 ## 📋 Changelog
 
-### v1.1.0
+### v1.2
+- **Case Opening Stats** — Track case openings with rarity breakdown, gold rate, best pull, money spent, and luck comparison vs expected odds
+- **Direct Link Fix** — Floats and patterns now load when navigating via shared inventory links
+- **Open Case Stats button** — Added to inventory page header
+- **Discord link** — Added to extension popup
+- **Draggable stats panel** — Move the case stats panel anywhere on screen
+
+### v1.1
 - **Doppler Pricing Fix** — Correct phase-specific prices for all knife types (Butterfly, Karambit, etc.)
 - **Skinport Pricing Mode** — New toggle in settings. Get prices with zero API keys required. Includes built-in Doppler phase pricing.
 - **Inspect in Browser** — New button opens a 3D skin viewer with your exact skin, stickers, and wear.
 - **Price Sanity Filter** — Fixed absurd pricing on items like Operation Hydra Case Key.
 - **Currency Fix** — Doppler prices now correctly convert to your selected currency (EUR, GBP, CNY).
 
-### v1.0.0
+### v1.0
 - Initial release
 
 ---
@@ -133,7 +154,7 @@
 ```
 riftwalk/
 ├── manifest.json          # Extension manifest (MV3)
-├── content.js             # Main content script - inventory labeling, trade offers
+├── content.js             # Main content script - inventory labeling, trade offers, case stats
 ├── pageworld.js           # MAIN world script - access to Steam's JS globals
 ├── background.js          # Service worker - PricEmpire/Skinport API, CSFloat proxy
 ├── skin_data.js           # Pattern databases - fade, blue gem, doppler, marble fade
