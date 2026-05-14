@@ -2,7 +2,7 @@
 
 > Free browser extension that adds instant pricing, float values, Doppler phase detection, pattern tiers, sticker values, and trade offer comparison directly to your Steam inventory.
 
-![Version](https://img.shields.io/badge/version-1.1-blue)
+![Version](https://img.shields.io/badge/version-1.1.0-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Chrome](https://img.shields.io/badge/platform-Chrome%20%7C%20Firefox%20%7C%20Edge%20%7C%20Brave%20%7C%20Opera-orange)
 
@@ -116,14 +116,14 @@
 
 ## 📋 Changelog
 
-### v1.1
+### v1.1.0
 - **Doppler Pricing Fix** — Correct phase-specific prices for all knife types (Butterfly, Karambit, etc.)
 - **Skinport Pricing Mode** — New toggle in settings. Get prices with zero API keys required. Includes built-in Doppler phase pricing.
 - **Inspect in Browser** — New button opens a 3D skin viewer with your exact skin, stickers, and wear.
 - **Price Sanity Filter** — Fixed absurd pricing on items like Operation Hydra Case Key.
 - **Currency Fix** — Doppler prices now correctly convert to your selected currency (EUR, GBP, CNY).
 
-### v1.0
+### v1.0.0
 - Initial release
 
 ---

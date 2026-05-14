@@ -26,10 +26,11 @@
     } catch(e) {}
   }, 1500);
 
-  let IS_INVENTORY  = /\/inventory/.test(location.pathname);
+  let IS_HISTORY    = /\/inventoryhistory/.test(location.pathname);
+  let IS_INVENTORY  = /\/inventory/.test(location.pathname) && !IS_HISTORY;
   let IS_TRADEOFFER = /\/tradeoffer\//.test(location.pathname);
   let IS_TRADEOFFERS_LIST = /\/tradeoffers\/?($|\?|sent)/.test(location.pathname);
-  let IS_PROFILE    = /\/(profiles|id)\/[^/]+\/?$/.test(location.pathname) && !IS_INVENTORY && !IS_TRADEOFFER && !IS_TRADEOFFERS_LIST;
+  let IS_PROFILE    = /\/(profiles|id)\/[^/]+\/?$/.test(location.pathname) && !IS_INVENTORY && !IS_TRADEOFFER && !IS_TRADEOFFERS_LIST && !IS_HISTORY;
 
   let priceMap = {}, settings = {};
   let invDescs = new Map(), nameCache = new Map(), floatCache = new Map();
@@ -1035,6 +1036,26 @@
     document.getElementById('rw-refresh').onclick = () => chrome.runtime.sendMessage({ type: 'FORCE_REFRESH' });
     document.getElementById('rw-search').addEventListener('input', filterItems);
     document.getElementById('rw-copy').onclick = copyInventoryList;
+
+    // Add Case Stats button near Trade Offers in the header
+    function addCaseStatsHeaderBtn() {
+      if (document.getElementById('rw-casestats-header')) return;
+      const tradeOffersBtn = document.querySelector('.new_trade_offer_btn');
+      if (!tradeOffersBtn) return;
+      const btn = document.createElement('a');
+      btn.id = 'rw-casestats-header';
+      btn.href = '#';
+      btn.className = 'btn_darkblue_white_innerfade btn_medium';
+      btn.innerHTML = '<span>📦 Open Case Stats</span>';
+      btn.style.cssText = 'margin-right:8px;cursor:pointer;text-decoration:none';
+      btn.onclick = (e) => {
+        e.preventDefault();
+        const profileUrl = location.pathname.match(/\/(profiles|id)\/[^/]+/)?.[0] || '';
+        if (profileUrl) window.open(`https://steamcommunity.com${profileUrl}/inventoryhistory/`, '_blank');
+      };
+      tradeOffersBtn.parentElement.insertBefore(btn, tradeOffersBtn);
+    }
+    setTimeout(addCaseStatsHeaderBtn, 1000);
   }
 
   // ── Copy inventory list ───────────────────────────────────
@@ -1584,7 +1605,30 @@
     settings = (await chrome.storage.local.get(['rw_settings'])).rw_settings || {};
     const pr = await chrome.storage.local.get(['rw_prices_cache']);
     if (pr.rw_prices_cache?.data) { priceMap = pr.rw_prices_cache.data; console.log(`[Riftwalk] ${Object.keys(priceMap).length} prices`); }
-    if (IS_INVENTORY) { injectBar(); setupDetailPanelObserver(); setupSelection(); startInventoryLoad(); }
+    if (IS_INVENTORY) { injectBar(); setupDetailPanelObserver(); setupSelection(); startInventoryLoad();
+      // When navigating via direct item link (#730_2_xxx), Steam loads differently — retry props+processing
+      if (location.hash && location.hash.includes('730')) {
+        console.log('[Riftwalk] Direct item link detected, scheduling extra retries');
+        const applyAllFloats = () => {
+          readPageProps();
+          // Apply floats and patterns to ALL visible items, bypassing batching
+          const pages = document.querySelectorAll('.inventory_page');
+          const items = [];
+          if (pages.length > 0) {
+            pages.forEach(page => { if (page.style.display !== 'none') page.querySelectorAll('.item.app730').forEach(el => items.push(el)); });
+          } else {
+            document.querySelectorAll('.item.app730').forEach(el => items.push(el));
+          }
+          items.forEach(el => labelItem(el));
+          // Also apply floats directly in case labelItem batching missed them
+          floatCache.forEach((fd, aid) => applyFloatToDOM(aid, fd));
+          updateTotal();
+        };
+        setTimeout(applyAllFloats, 3000);
+        setTimeout(applyAllFloats, 6000);
+        setTimeout(applyAllFloats, 10000);
+      }
+    }
     if (IS_TRADEOFFER) {
       setupTradeOffer();
       console.log(`[Riftwalk] Trade offer mode, priceMap has ${Object.keys(priceMap).length} prices`);
@@ -1634,6 +1678,471 @@
     if(!sid||inventoryLoading)return;inventoryLoading=true;
     console.log(`[Riftwalk] Inventory owner: ${sid}`);fetchAllDescriptions(sid);setTimeout(processItems,2000);
   }
+
+  // ── Case Opening Stats (Inventory History page) ─────────────
+  function initCaseStats() {
+    if (!IS_HISTORY) return;
+    console.log('[Riftwalk] Case Stats: initializing on inventory history page');
+
+    let cachedPrices = {};
+    let scanningActive = false;
+    let scanTimer = null;
+
+    // Load cached prices for value calculation
+    chrome.storage.local.get(['rw_prices_cache'], (r) => {
+      const entry = r.rw_prices_cache;
+      if (entry?.data) cachedPrices = entry.data;
+      console.log(`[Riftwalk] Case Stats: loaded ${Object.keys(cachedPrices).length} cached prices`);
+    });
+
+    const RARITY_MAP = {
+      '#4b69ff': { name: 'Mil-Spec', tier: 'blue' },
+      '#8847ff': { name: 'Restricted', tier: 'purple' },
+      '#d32ce6': { name: 'Classified', tier: 'pink' },
+      '#eb4b4b': { name: 'Covert', tier: 'red' },
+      '#e4ae39': { name: 'Extraordinary', tier: 'gold' },
+      '#ade55c': { name: 'High Grade', tier: 'blue' },
+    };
+
+    function getRarityFromColor(color) {
+      if (!color) return { name: 'Unknown', tier: 'blue' };
+      const c = color.toLowerCase().replace(/\s/g, '');
+      for (const [hex, data] of Object.entries(RARITY_MAP)) {
+        if (c.includes(hex.replace('#', ''))) return data;
+      }
+      return { name: 'Unknown', tier: 'blue' };
+    }
+
+    function getItemPrice(marketName) {
+      if (!marketName || Object.keys(cachedPrices).length === 0) return 0;
+      // Exact match first
+      if (cachedPrices[marketName]) {
+        const e = cachedPrices[marketName];
+        return (e.buff || e.skins || 0);
+      }
+      // History page names don't include wear — try matching with all wear conditions
+      const wears = ['(Factory New)', '(Minimal Wear)', '(Field-Tested)', '(Well-Worn)', '(Battle-Scarred)'];
+      let bestPrice = 0;
+      for (const w of wears) {
+        const fullName = `${marketName} ${w}`;
+        if (cachedPrices[fullName]) {
+          const e = cachedPrices[fullName];
+          const p = e.buff || e.skins || 0;
+          if (p > bestPrice) bestPrice = p;
+        }
+      }
+      return bestPrice;
+    }
+
+    // Steam in-game key prices by currency
+    const KEY_PRICE_CENTS = { USD: 249, EUR: 219, GBP: 179, CNY: 1650, CAD: 325, AUD: 395, CHF: 250, SEK: 2700, PLN: 1050, BRL: 1299, TRY: 8500 };
+
+    function getUserCurrency() {
+      return settings.pricingMode === 'skinport' ? (settings.spCurrency || 'USD') : (settings.currency || 'USD');
+    }
+
+    function getKeyCostCents() {
+      return KEY_PRICE_CENTS[getUserCurrency()] || 250;
+    }
+
+    function fmtPrice(cents) {
+      if (!cents) return '';
+      const cur = getUserCurrency();
+      const sym = { USD: '$', EUR: '€', GBP: '£', CNY: '¥', CAD: 'C$', AUD: 'A$', CHF: 'Fr', SEK: 'kr', PLN: 'zł', BRL: 'R$', TRY: '₺' }[cur] || '$';
+      return `${sym}${(cents / 100).toFixed(2)}`;
+    }
+
+    function scanHistory() {
+      const rows = document.querySelectorAll('.tradehistoryrow');
+      const stats = {
+        totalOpened: 0,
+        totalEvents: rows.length,
+        byRarity: { blue: 0, purple: 0, pink: 0, red: 0, gold: 0 },
+        byCaseType: {},
+        items: [],
+        goldItems: [],
+        lastGoldIndex: -1,
+        bestPull: null,
+        bestPullPrice: 0,
+        totalCaseCost: 0,
+        totalCapsules: 0,
+        byCapsuleType: {},
+      };
+
+      rows.forEach((row) => {
+        const desc = row.querySelector('.tradehistory_event_description')?.textContent?.trim() || '';
+        if (!desc.includes('Unlocked a container')) return;
+
+        let receivedName = '', receivedColor = '', caseName = '', hasKey = false;
+        const plusGroups = row.querySelectorAll('.tradehistory_items');
+
+        for (const group of plusGroups) {
+          const pm = group.querySelector('.tradehistory_items_plusminus');
+          if (pm && pm.textContent.trim() === '+') {
+            const nameEl = group.querySelector('.history_item_name');
+            if (nameEl) {
+              receivedName = nameEl.textContent.trim();
+              receivedColor = nameEl.getAttribute('style')?.match(/color:\s*(#[a-fA-F0-9]+)/)?.[1] || '';
+            }
+          }
+          if (pm && pm.textContent.trim() === '-') {
+            const minusNames = group.querySelectorAll('.history_item_name');
+            for (const mn of minusNames) {
+              const t = mn.textContent.trim();
+              if (t.includes('Key')) hasKey = true;
+              if ((t.includes('Case') || t.includes('Capsule') || t.includes('Package')) && !t.includes('Key')) caseName = t;
+            }
+          }
+        }
+
+        if (!receivedName) return;
+
+        const isCapsule = !hasKey;
+        const rarity = getRarityFromColor(receivedColor);
+
+        if (isCapsule) {
+          // Sticker capsule — track separately
+          stats.totalCapsules++;
+          if (caseName) stats.byCapsuleType[caseName] = (stats.byCapsuleType[caseName] || 0) + 1;
+          return;
+        }
+
+        // Real case opening (has key)
+        stats.totalOpened++;
+        stats.byRarity[rarity.tier] = (stats.byRarity[rarity.tier] || 0) + 1;
+
+        if (caseName) {
+          stats.byCaseType[caseName] = (stats.byCaseType[caseName] || 0) + 1;
+          // Track case cost
+          const casePrice = getItemPrice(caseName);
+          if (casePrice > 0) stats.totalCaseCost += casePrice;
+        }
+
+        // Check price for best pull
+        const rarityRank = { blue: 1, purple: 2, pink: 3, red: 4, gold: 5 };
+        const itemPrice = getItemPrice(receivedName);
+        const itemRank = rarityRank[rarity.tier] || 0;
+        const bestRank = stats.bestPull ? (rarityRank[stats.bestPull.rarity.tier] || 0) : 0;
+
+        if (itemPrice > stats.bestPullPrice || (itemPrice === 0 && stats.bestPullPrice === 0 && itemRank > bestRank)) {
+          stats.bestPullPrice = itemPrice;
+          stats.bestPull = { name: receivedName, price: itemPrice, rarity: rarity };
+        }
+
+        if (rarity.tier === 'gold') {
+          stats.goldItems.push({ name: receivedName, case: caseName, index: stats.totalOpened });
+          if (stats.lastGoldIndex === -1) stats.lastGoldIndex = stats.totalOpened;
+        }
+
+        stats.items.push({ name: receivedName, rarity: rarity, case: caseName });
+      });
+
+      return stats;
+    }
+
+    function renderPanel(stats) {
+      let panel = document.getElementById('rw-case-stats');
+      if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'rw-case-stats';
+        panel.style.cssText = `
+          position:fixed;top:80px;right:16px;width:290px;
+          background:linear-gradient(135deg,#1a1f2e,#141824);
+          border:1px solid rgba(102,192,244,.12);border-radius:12px;
+          padding:18px;z-index:9999;font-family:'Segoe UI',sans-serif;
+          color:#c7d5e0;box-shadow:0 8px 32px rgba(0,0,0,.5);
+          max-height:calc(100vh - 100px);overflow-y:auto;
+          transition:box-shadow .3s;
+        `;
+        document.body.appendChild(panel);
+
+        // Make panel draggable by header area
+        let isDragging = false, dragOffX = 0, dragOffY = 0;
+        panel.addEventListener('mousedown', (e) => {
+          // Only drag from header area (first 40px)
+          const rect = panel.getBoundingClientRect();
+          if (e.clientY - rect.top > 40) return;
+          isDragging = true; panel.style.cursor = 'grabbing';
+          dragOffX = e.clientX - rect.left;
+          dragOffY = e.clientY - rect.top;
+          e.preventDefault();
+        });
+        document.addEventListener('mousemove', (e) => {
+          if (!isDragging) return;
+          panel.style.left = (e.clientX - dragOffX) + 'px';
+          panel.style.top = (e.clientY - dragOffY) + 'px';
+          panel.style.right = 'auto';
+        });
+        document.addEventListener('mouseup', () => { isDragging = false; panel.style.cursor = ''; });
+      }
+
+      const goldRate = stats.byRarity.gold > 0 ? Math.round(stats.totalOpened / stats.byRarity.gold) : '∞';
+      const casesSinceGold = stats.lastGoldIndex > 0 ? stats.lastGoldIndex - 1 : stats.totalOpened;
+      const sortedCases = Object.entries(stats.byCaseType).sort((a, b) => b[1] - a[1]);
+      const totalCaseTypes = sortedCases.reduce((sum, [, c]) => sum + c, 0);
+
+      // Preserve cases expanded state
+      const casesExpanded = panel.querySelector('#rw-cases-grid')?.style.display !== 'none';
+
+      panel.innerHTML = `
+        <div style="cursor:grab;user-select:none;margin-bottom:8px">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div style="font-size:14px;font-weight:700;color:#66c0f4;letter-spacing:.5px">📦 CASE STATS</div>
+            <div style="font-size:8px;color:#4a5c6d">RIFTWALK | rftwlk.com</div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+          <div style="background:rgba(255,255,255,.03);border-radius:8px;padding:10px;text-align:center">
+            <div style="font-size:22px;font-weight:700;color:#fff">${stats.totalOpened}</div>
+            <div style="font-size:9px;color:#4a5c6d;text-transform:uppercase;letter-spacing:1px">Cases Opened</div>
+          </div>
+          <div style="background:rgba(255,255,255,.03);border-radius:8px;padding:10px;text-align:center">
+            <div style="font-size:22px;font-weight:700;color:#e4ae39">${stats.byRarity.gold}</div>
+            <div style="font-size:9px;color:#4a5c6d;text-transform:uppercase;letter-spacing:1px">Golds</div>
+          </div>
+          <div style="background:rgba(255,255,255,.03);border-radius:8px;padding:10px;text-align:center">
+            <div style="font-size:18px;font-weight:700;color:#66c0f4">1:${goldRate}</div>
+            <div style="font-size:9px;color:#4a5c6d;text-transform:uppercase;letter-spacing:1px">Gold Rate</div>
+          </div>
+          <div style="background:rgba(255,255,255,.03);border-radius:8px;padding:10px;text-align:center">
+            <div style="font-size:18px;font-weight:700;color:#ef4444">${casesSinceGold}</div>
+            <div style="font-size:9px;color:#4a5c6d;text-transform:uppercase;letter-spacing:1px">Since Last Gold</div>
+          </div>
+        </div>
+
+        <div style="margin-bottom:14px">
+          <div style="font-size:10px;color:#4a5c6d;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Money Spent</div>
+          <div style="background:rgba(255,255,255,.03);border-radius:8px;padding:10px">
+            <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px">
+              <span style="color:#6a7a8a">Case Cost</span>
+              <span style="color:#fff;font-weight:600">${stats.totalCaseCost > 0 ? fmtPrice(stats.totalCaseCost) : 'N/A'}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px">
+              <span style="color:#6a7a8a">Key Cost (${stats.totalOpened} × ${fmtPrice(getKeyCostCents())})</span>
+              <span style="color:#fff;font-weight:600">${fmtPrice(stats.totalOpened * getKeyCostCents())}</span>
+            </div>
+            <div style="border-top:1px solid rgba(255,255,255,.06);padding-top:4px;margin-top:4px;display:flex;justify-content:space-between;font-size:12px">
+              <span style="color:#ef4444;font-weight:700">Total Spent</span>
+              <span style="color:#ef4444;font-weight:700">${fmtPrice((stats.totalCaseCost > 0 ? stats.totalCaseCost : 0) + (stats.totalOpened * getKeyCostCents()))}</span>
+            </div>
+          </div>
+        </div>
+
+        ${stats.bestPull ? `
+        <div style="margin-bottom:14px">
+          <div style="font-size:10px;color:#4a5c6d;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Best Pull</div>
+          <div style="background:rgba(102,192,244,.06);border:1px solid rgba(102,192,244,.12);border-radius:8px;padding:8px 12px">
+            <div style="font-size:12px;color:#fff;font-weight:600">${stats.bestPull.rarity.tier === 'gold' ? '★ ' : ''}${stats.bestPull.name}</div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px">
+              ${stats.bestPull.price ? `<span style="font-size:14px;color:#4ade80;font-weight:700">${fmtPrice(stats.bestPull.price)}</span>` : ''}
+              <span style="font-size:10px;color:${{blue:'#4b69ff',purple:'#8847ff',pink:'#d32ce6',red:'#eb4b4b',gold:'#e4ae39'}[stats.bestPull.rarity.tier] || '#888'}">${stats.bestPull.rarity.name}</span>
+            </div>
+          </div>
+        </div>` : ''}
+
+        <div style="margin-bottom:14px">
+          <div style="font-size:10px;color:#4a5c6d;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Rarity Breakdown <span style="font-size:7px;color:#2a3a4a;text-transform:none;letter-spacing:0">vs expected odds</span></div>
+          ${renderBar('Mil-Spec (1:1.25)', stats.byRarity.blue, stats.totalOpened, '#4b69ff', 79.92)}
+          ${renderBar('Restricted (1:6)', stats.byRarity.purple, stats.totalOpened, '#8847ff', 15.98)}
+          ${renderBar('Classified (1:31)', stats.byRarity.pink, stats.totalOpened, '#d32ce6', 3.2)}
+          ${renderBar('Covert (1:156)', stats.byRarity.red, stats.totalOpened, '#eb4b4b', 0.64)}
+          ${renderBar('Gold ★ (1:385)', stats.byRarity.gold, stats.totalOpened, '#e4ae39', 0.26)}
+        </div>
+
+        ${sortedCases.length > 0 ? `
+        <div style="margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;cursor:pointer" id="rw-cases-toggle">
+            <div style="font-size:10px;color:#4a5c6d;text-transform:uppercase;letter-spacing:1px">Cases Opened <span style="color:#66c0f4">×${totalCaseTypes}</span></div>
+            <div style="font-size:8px;color:#66c0f4" id="rw-cases-toggle-label">${casesExpanded ? '▼ Hide' : '▶ Show All'}</div>
+          </div>
+          <div id="rw-cases-grid" style="display:${casesExpanded ? 'grid' : 'none'};grid-template-columns:1fr 1fr;gap:3px">
+          ${sortedCases.map(([name, count]) => {
+            const shortName = name.replace(/\s*Case\s*/i, '').replace(/\s*Weapon\s*/i, '').trim();
+            const casePrice = getItemPrice(name);
+            return `
+            <div style="background:rgba(255,255,255,.03);border-radius:4px;padding:4px 6px;font-size:9px;display:flex;justify-content:space-between;align-items:center;overflow:hidden">
+              <span style="color:#8a9aaa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:85px" title="${name}">${shortName}</span>
+              <span style="color:#66c0f4;font-weight:600;flex-shrink:0">×${count}</span>
+            </div>`;
+          }).join('')}
+          </div>
+        </div>` : ''}
+
+        ${stats.goldItems.length > 0 ? `
+        <div style="margin-bottom:12px">
+          <div style="font-size:10px;color:#4a5c6d;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Gold Unboxes ★</div>
+          ${stats.goldItems.map(g => `
+            <div style="background:rgba(228,174,57,.06);border:1px solid rgba(228,174,57,.1);border-radius:6px;padding:6px 10px;margin-bottom:4px;font-size:11px">
+              <span style="color:#e4ae39">★</span> <span style="color:#fff">${g.name}</span>
+              <span style="color:#4a5c6d;font-size:9px;margin-left:4px">#${g.index}</span>
+            </div>
+          `).join('')}
+        </div>` : ''}
+
+        ${stats.totalCapsules > 0 ? `
+        <div style="margin-bottom:12px">
+          <div style="font-size:10px;color:#4a5c6d;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Sticker Capsules</div>
+          <div style="background:rgba(255,255,255,.03);border-radius:6px;padding:6px 10px;font-size:11px;color:#6a7a8a">
+            ${stats.totalCapsules} capsules opened (no key cost)
+          </div>
+        </div>` : ''}
+
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+          <button id="rw-scan-all" style="flex:1;background:${scanningActive ? 'rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.3)' : 'rgba(102,192,244,.1);border:1px solid rgba(102,192,244,.2)'};color:${scanningActive ? '#ef4444' : '#66c0f4'};border-radius:6px;padding:7px;font-size:11px;cursor:pointer;font-weight:600;transition:all .15s">
+            ${scanningActive ? `⏹ Stop Scanning (${stats.totalEvents} events...)` : '🔄 Scan All History'}
+          </button>
+        </div>
+
+        <div style="font-size:8px;color:#2a3a4a;text-align:center">Scanned ${stats.totalEvents} events · ${stats.totalOpened} case openings found${scanningActive ? ' · Scanning...' : ''}</div>
+      `;
+
+      // Bind scan button
+      document.getElementById('rw-scan-all').onclick = () => {
+        if (scanningActive) {
+          stopScanning();
+        } else {
+          startScanning();
+        }
+      };
+
+      // Bind cases toggle
+      const casesToggle = document.getElementById('rw-cases-toggle');
+      if (casesToggle) {
+        casesToggle.onclick = () => {
+          const grid = document.getElementById('rw-cases-grid');
+          const label = document.getElementById('rw-cases-toggle-label');
+          if (grid && label) {
+            const isVisible = grid.style.display !== 'none';
+            grid.style.display = isVisible ? 'none' : 'grid';
+            label.textContent = isVisible ? '▶ Show All' : '▼ Hide';
+          }
+        };
+      }
+    }
+
+    function renderBar(label, count, total, color, expectedOdds) {
+      const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';
+      const barWidth = total > 0 ? Math.max(2, (count / total) * 100) : 0;
+      const expected = total > 0 ? Math.round(total * expectedOdds / 100) : 0;
+      const luck = count > expected ? '🍀' : count < expected ? '😢' : '';
+      return `
+        <div style="margin-bottom:6px">
+          <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px">
+            <span style="color:${color};font-weight:600">${label}</span>
+            <span style="color:#8a9aaa">${count} <span style="color:#3a4a5a;font-size:8px">/ ${expected} expected</span> ${luck}</span>
+          </div>
+          <div style="background:rgba(255,255,255,.04);border-radius:3px;height:5px;overflow:hidden">
+            <div style="width:${barWidth}%;height:100%;background:${color};border-radius:3px;transition:width .3s"></div>
+          </div>
+        </div>
+      `;
+    }
+
+    function startScanning() {
+      scanningActive = true;
+      scanStartEvents = document.querySelectorAll('.tradehistoryrow').length;
+      updateStats();
+      clickLoadMore();
+    }
+
+    function stopScanning() {
+      scanningActive = false;
+      if (scanTimer) clearTimeout(scanTimer);
+      scanTimer = null;
+      updateStats();
+    }
+
+    let scanStartEvents = 0;
+
+    function clickLoadMore() {
+      if (!scanningActive) return;
+      const loadBtn = document.getElementById('load_more_button');
+      
+      if (loadBtn && loadBtn.offsetParent !== null) {
+        // Scroll to Load More button so Steam loads it
+        loadBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        
+        setTimeout(() => {
+          loadBtn.click();
+          // Wait for content to load
+          scanTimer = setTimeout(() => {
+            updateStats();
+            const stillVisible = document.getElementById('load_more_button');
+            if (stillVisible && stillVisible.offsetParent !== null && scanningActive) {
+              scanTimer = setTimeout(clickLoadMore, 3500);
+            } else {
+              // Check if still loading
+              const isLoading = document.getElementById('inventory_history_loading');
+              if (isLoading && isLoading.style.display !== 'none' && scanningActive) {
+                scanTimer = setTimeout(clickLoadMore, 3000);
+              } else {
+                scanningActive = false;
+                updateStats();
+              }
+            }
+          }, 1000);
+        }, 500);
+      } else {
+        // Check if loading indicator is showing
+        const isLoading = document.getElementById('inventory_history_loading');
+        if (isLoading && isLoading.style.display !== 'none' && scanningActive) {
+          scanTimer = setTimeout(clickLoadMore, 3000);
+        } else {
+          scanningActive = false;
+          updateStats();
+        }
+      }
+    }
+
+    function updateStats() {
+      const stats = scanHistory();
+      renderPanel(stats);
+    }
+
+    // Add toggle button at top of history page
+    function addHistoryButton() {
+      const pagingRow = document.querySelector('.inventory_history_pagingrow');
+      if (!pagingRow || document.getElementById('rw-casestats-toggle')) return;
+
+      const btn = document.createElement('button');
+      btn.id = 'rw-casestats-toggle';
+      btn.innerHTML = '📦 <b>Open Case Stats</b>';
+      btn.style.cssText = `
+        background:linear-gradient(135deg,#66c0f4,#4a9eda);color:#fff;border:none;
+        border-radius:6px;padding:8px 18px;font-size:13px;cursor:pointer;
+        font-family:'Motiva Sans',Arial,sans-serif;margin-left:16px;
+        transition:all .2s;display:inline-block;vertical-align:middle;
+      `;
+      btn.onmouseenter = () => btn.style.filter = 'brightness(1.15)';
+      btn.onmouseleave = () => btn.style.filter = '';
+
+      let panelVisible = true;
+      btn.onclick = () => {
+        const panel = document.getElementById('rw-case-stats');
+        if (panel) {
+          panelVisible = !panelVisible;
+          panel.style.display = panelVisible ? 'block' : 'none';
+          btn.innerHTML = panelVisible ? '📦 <b>Hide Case Stats</b>' : '📦 <b>Open Case Stats</b>';
+        }
+      };
+
+      pagingRow.appendChild(btn);
+    }
+
+    addHistoryButton();
+    setTimeout(updateStats, 1500);
+
+    // Re-scan when "Load More" adds new content
+    const historyTable = document.getElementById('inventory_history_table');
+    if (historyTable) {
+      new MutationObserver(() => {
+        setTimeout(updateStats, 500);
+      }).observe(historyTable, { childList: true, subtree: true });
+    }
+  }
+
+  if (IS_HISTORY) initCaseStats();
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
