@@ -10,6 +10,10 @@ const DOPPLER_CACHE   = 'rw_doppler_cache';
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   switch (msg.type) {
 
+    case 'OPEN_PORTFOLIO':
+      chrome.tabs.create({ url: chrome.runtime.getURL('portfolio.html') });
+      return false;
+
     case 'FETCH':
       fetch(msg.url, msg.options || {})
         .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })

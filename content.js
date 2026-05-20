@@ -34,6 +34,7 @@
 
   let priceMap = {}, settings = {};
   let invDescs = new Map(), nameCache = new Map(), floatCache = new Map();
+  let portfolioSnapshotSaved = false;
   let dopplerPrices = new Map(), dopplerPhases = new Map();
   let debounce = null, floatQueue = [], floatBusy = false;
   let currentOwnerSteamId = null, inventoryLoading = false;
@@ -1024,6 +1025,27 @@
     let total = 0, priced = 0, count = 0;
     invDescs.forEach((desc, aid) => { const n = desc.market_hash_name; if (!n) return; count++; const c = getCents(n, aid); if (c) { total += c; priced++; } });
     updateBar(total, count, priced);
+    // Save portfolio snapshot tracking
+    if (total > 0 && count > 10 && currentOwnerSteamId) {
+      // Save after 30 seconds to allow all items + Doppler prices to load
+      if (!portfolioSnapshotSaved) {
+        setTimeout(() => {
+          let finalTotal = 0, finalCount = 0, finalPriced = 0;
+          invDescs.forEach((desc, aid) => { const n = desc.market_hash_name; if (!n) return; finalCount++; const c = getCents(n, aid); if (c) { finalTotal += c; finalPriced++; } });
+          savePortfolioSnapshot(finalTotal, finalCount, finalPriced);
+          portfolioSnapshotSaved = true;
+        }, 30000);
+      }
+      // Also save on page unload with latest data
+      if (!window.__rw_unload_bound) {
+        window.__rw_unload_bound = true;
+        window.addEventListener('beforeunload', () => {
+          let finalTotal = 0, finalCount = 0, finalPriced = 0;
+          invDescs.forEach((desc, aid) => { const n = desc.market_hash_name; if (!n) return; finalCount++; const c = getCents(n, aid); if (c) { finalTotal += c; finalPriced++; } });
+          if (finalTotal > 0 && finalCount > 10) savePortfolioSnapshot(finalTotal, finalCount, finalPriced);
+        });
+      }
+    }
   }
   function injectBar() {
     if (document.getElementById('rw-bar')) return;
@@ -1042,6 +1064,17 @@
       if (document.getElementById('rw-casestats-header')) return;
       const tradeOffersBtn = document.querySelector('.new_trade_offer_btn');
       if (!tradeOffersBtn) return;
+
+      // Portfolio button
+      const portBtn = document.createElement('a');
+      portBtn.id = 'rw-portfolio-header';
+      portBtn.href = '#';
+      portBtn.className = 'btn_darkblue_white_innerfade btn_medium';
+      portBtn.innerHTML = '<span>📈 Portfolio</span>';
+      portBtn.style.cssText = 'margin-right:8px;cursor:pointer;text-decoration:none';
+      portBtn.onclick = (e) => { e.preventDefault(); chrome.runtime.sendMessage({ type: 'OPEN_PORTFOLIO' }); };
+
+      // Case Stats button
       const btn = document.createElement('a');
       btn.id = 'rw-casestats-header';
       btn.href = '#';
@@ -1053,7 +1086,9 @@
         const profileUrl = location.pathname.match(/\/(profiles|id)\/[^/]+/)?.[0] || '';
         if (profileUrl) window.open(`https://steamcommunity.com${profileUrl}/inventoryhistory/`, '_blank');
       };
+
       tradeOffersBtn.parentElement.insertBefore(btn, tradeOffersBtn);
+      tradeOffersBtn.parentElement.insertBefore(portBtn, btn);
     }
     setTimeout(addCaseStatsHeaderBtn, 1000);
   }
@@ -1622,7 +1657,6 @@
           items.forEach(el => labelItem(el));
           // Also apply floats directly in case labelItem batching missed them
           floatCache.forEach((fd, aid) => applyFloatToDOM(aid, fd));
-          updateTotal();
         };
         setTimeout(applyAllFloats, 3000);
         setTimeout(applyAllFloats, 6000);
@@ -1677,6 +1711,94 @@
     if(!sid&&attempt<8){await new Promise(r=>setTimeout(r,1000));return startInventoryLoad(attempt+1);}
     if(!sid||inventoryLoading)return;inventoryLoading=true;
     console.log(`[Riftwalk] Inventory owner: ${sid}`);fetchAllDescriptions(sid);setTimeout(processItems,2000);
+  }
+
+  // ── Portfolio Tracker ────────────────────────────────────────
+  async function savePortfolioSnapshot(totalCents, itemCount, pricedCount) {
+    try {
+      // Check if extension context is still valid
+      if (!chrome.runtime?.id) return;
+      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+      const data = await chrome.storage.local.get(['rw_portfolio']);
+      const portfolio = data.rw_portfolio || { snapshots: [], items: {} };
+
+      // Only save one snapshot per day
+      const lastSnap = portfolio.snapshots[portfolio.snapshots.length - 1];
+      if (lastSnap && lastSnap.date === today) return;
+
+      // Save daily snapshot
+      portfolio.snapshots.push({
+        date: today,
+        total: totalCents,
+        count: itemCount,
+        priced: pricedCount,
+      });
+
+      // Keep max 365 days
+      if (portfolio.snapshots.length > 365) portfolio.snapshots = portfolio.snapshots.slice(-365);
+
+      // Save individual item prices for per-item tracking
+      const itemsToday = {};
+      const itemQty = {};
+      const itemIcons = {};
+      const itemDetails = {};
+      invDescs.forEach((desc, aid) => {
+        const name = desc.market_hash_name;
+        if (!name) return;
+        const cents = getCents(name, aid);
+        if (cents > 0) {
+          if (!itemsToday[name] || cents > itemsToday[name]) {
+            itemsToday[name] = cents;
+          }
+          itemQty[name] = (itemQty[name] || 0) + 1;
+          if (desc.icon_url && !itemIcons[name]) {
+            itemIcons[name] = `https://steamcommunity.com/economy/image/${desc.icon_url}/96x96`;
+          }
+          // Save float and pattern data
+          if (!itemDetails[name] && floatCache.has(aid)) {
+            const fd = floatCache.get(aid);
+            itemDetails[name] = {};
+            if (fd.floatvalue) itemDetails[name].float = fd.floatvalue;
+            if (fd.paintseed) itemDetails[name].seed = fd.paintseed;
+          }
+          // Save Doppler phase
+          if (!itemDetails[name]?.phase && dopplerPhases.has(aid)) {
+            if (!itemDetails[name]) itemDetails[name] = {};
+            itemDetails[name].phase = dopplerPhases.get(aid).phase;
+          }
+        }
+      });
+
+      // Merge into items history
+      for (const [name, cents] of Object.entries(itemsToday)) {
+        if (!portfolio.items[name]) portfolio.items[name] = [];
+        const lastEntry = portfolio.items[name][portfolio.items[name].length - 1];
+        if (!lastEntry || lastEntry.date !== today) {
+          portfolio.items[name].push({ date: today, price: cents, qty: itemQty[name] || 1 });
+        }
+        // Save icon URL and details separately (doesn't change per day)
+        if (!portfolio.icons) portfolio.icons = {};
+        if (itemIcons[name]) portfolio.icons[name] = itemIcons[name];
+        if (!portfolio.details) portfolio.details = {};
+        if (itemDetails[name]) portfolio.details[name] = itemDetails[name];
+        // Keep max 90 days per item
+        if (portfolio.items[name].length > 90) portfolio.items[name] = portfolio.items[name].slice(-90);
+      }
+
+      // Clean up items not seen in 30 days
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
+      for (const name of Object.keys(portfolio.items)) {
+        const entries = portfolio.items[name];
+        if (entries.length === 0 || entries[entries.length - 1].date < thirtyDaysAgo) {
+          delete portfolio.items[name];
+        }
+      }
+
+      await chrome.storage.local.set({ rw_portfolio: portfolio });
+      console.log(`[Riftwalk] Portfolio snapshot saved: ${sym()}${(totalCents/100).toFixed(2)} (${itemCount} items, ${Object.keys(itemsToday).length} priced)`);
+    } catch (e) {
+      console.warn('[Riftwalk] Portfolio save error:', e);
+    }
   }
 
   // ── Case Opening Stats (Inventory History page) ─────────────
@@ -1799,6 +1921,8 @@
 
         const isCapsule = !hasKey;
         const rarity = getRarityFromColor(receivedColor);
+        // Force gold for knives/gloves (★ items)
+        if (receivedName.startsWith('★')) rarity.tier = 'gold';
 
         if (isCapsule) {
           // Sticker capsule — track separately
@@ -1933,7 +2057,7 @@
         <div style="margin-bottom:14px">
           <div style="font-size:10px;color:#4a5c6d;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Best Pull</div>
           <div style="background:rgba(102,192,244,.06);border:1px solid rgba(102,192,244,.12);border-radius:8px;padding:8px 12px">
-            <div style="font-size:12px;color:#fff;font-weight:600">${stats.bestPull.rarity.tier === 'gold' ? '★ ' : ''}${stats.bestPull.name}</div>
+            <div style="font-size:12px;color:#fff;font-weight:600">${stats.bestPull.name}</div>
             <div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px">
               ${stats.bestPull.price ? `<span style="font-size:14px;color:#4ade80;font-weight:700">${fmtPrice(stats.bestPull.price)}</span>` : ''}
               <span style="font-size:10px;color:${{blue:'#4b69ff',purple:'#8847ff',pink:'#d32ce6',red:'#eb4b4b',gold:'#e4ae39'}[stats.bestPull.rarity.tier] || '#888'}">${stats.bestPull.rarity.name}</span>
