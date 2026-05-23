@@ -1027,6 +1027,10 @@
     updateBar(total, count, priced);
     // Save portfolio snapshot tracking
     if (total > 0 && count > 10 && currentOwnerSteamId) {
+      // Only save portfolio on OWN inventory (Trade Offers button only shows on your own)
+      const isOwnInventory = !!document.querySelector('.new_trade_offer_btn');
+      if (!isOwnInventory) return;
+
       // Save after 30 seconds to allow all items + Doppler prices to load
       if (!portfolioSnapshotSaved) {
         setTimeout(() => {
