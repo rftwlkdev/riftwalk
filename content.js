@@ -169,6 +169,10 @@
           floatCache.set(aid, { floatvalue: data.floatvalue, paintseed: data.paintseed, paintindex: data.paintindex });
           newFloats++;
         }
+        // Charms have no floatvalue but have paintindex — store for template display
+        if (!data.floatvalue && data.paintindex && !floatCache.has(aid)) {
+          floatCache.set(aid, { paintindex: data.paintindex });
+        }
         // Doppler phase from paintindex
         if (data.paintindex && !dopplerPhases.has(aid)) {
           const desc = invDescs.get(aid);
@@ -790,10 +794,17 @@
       if (rc) { el.classList.add('rw-rarity-border'); el.style.setProperty('--rw-rarity-color', rc); }
     }
 
-    // Exterior label (FN/MW/FT/WW/BS) — top right, but not if trade lock is there
+    // Exterior label (FN/MW/FT/WW/BS) with StatTrak prefix — top right, but not if trade lock is there
     if (desc && !el.querySelector('.rw-ext') && !el.querySelector('.rw-lock')) {
       const ext = getExterior(desc);
-      if (ext) { const e = document.createElement('div'); e.className = 'rw-ext'; e.textContent = ext; el.appendChild(e); }
+      const isST = name && name.includes('StatTrak');
+      const isSV = name && name.includes('Souvenir');
+      const prefix = isST ? 'ST ' : isSV ? 'SV ' : '';
+      if (ext || prefix) {
+        const e = document.createElement('div'); e.className = 'rw-ext';
+        e.textContent = prefix + (ext || '');
+        el.appendChild(e);
+      }
     }
 
     // Duplicate count badge
@@ -851,7 +862,10 @@
       if (existingRow && !existingRow.querySelector('.rw-fade') && fullName.match(/\| Fade[\s(]/)) {
         existingRow.remove();
       }
-      if (!el.querySelector('.rw-pattern-row') && fd.paintseed != null) {
+      if (!el.querySelector('.rw-pattern-row') && (fd.paintseed != null || (name && name.startsWith('Charm') && fd.paintindex != null))) {
+        const isCharm = name && name.startsWith('Charm');
+        const seedValue = isCharm ? fd.paintindex : fd.paintseed;
+        if (seedValue == null) return;
         const row = document.createElement('div'); row.className = 'rw-pattern-row';
         // Fade %
         let hasFadeBadge = false;
@@ -892,7 +906,7 @@
         // Pattern seed — only show if no fade badge (fade already shows the important info)
         if (!hasFadeBadge) {
           const p = document.createElement('div'); p.className = 'rw-pattern';
-          p.textContent = '#' + fd.paintseed;
+          p.textContent = '#' + seedValue;
           row.insertBefore(p, row.firstChild);
         }
         el.appendChild(row);
@@ -1574,11 +1588,16 @@
 
       // Exterior label
       if (desc.tags) {
+        const isST = (desc.market_hash_name || '').includes('StatTrak');
+        const isSV = (desc.market_hash_name || '').includes('Souvenir');
+        const prefix = isST ? 'ST ' : isSV ? 'SV ' : '';
         for (const tag2 of desc.tags) {
           if (tag2.category === 'Exterior') {
             const ext = EXT_MAP[tag2.localized_tag_name] || EXT_MAP[tag2.name] || tag2.localized_tag_name || tag2.name;
             if (ext && !el.querySelector('.rw-ext')) {
-              const e = document.createElement('div'); e.className = 'rw-ext'; e.textContent = ext; el.appendChild(e);
+              const e = document.createElement('div'); e.className = 'rw-ext';
+              e.textContent = prefix + ext;
+              el.appendChild(e);
             }
             break;
           }

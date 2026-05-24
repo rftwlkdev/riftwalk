@@ -144,9 +144,10 @@ document.getElementById('import-file').addEventListener('change', async (e) => {
       copyPrices: imp.copyPrices!==false,
     };
     await chrome.storage.local.set({ rw_settings: s });
-    loadSettings(); showMsg('Settings imported!', 'success');
+    loadSettings(); showMsg('Settings imported! Fetching prices...', 'success');
     const r = await chrome.runtime.sendMessage({ type: 'FORCE_REFRESH' });
-    if (r.ok) loadStatus();
+    if (r.ok) { showMsg('Settings imported & prices fetched!', 'success'); loadStatus(); }
+    else showMsg('Settings imported but price fetch failed: ' + (r.error || 'Unknown error'), 'error');
   } catch(err) { showMsg('Import failed: ' + err.message, 'error'); }
   e.target.value = '';
 });
