@@ -2,7 +2,7 @@
 
 > Free browser extension that adds instant pricing, float values, Doppler phase detection, pattern tiers, sticker values, trade offer comparison, case opening stats, and portfolio tracking directly to your Steam inventory.
 
-![Version](https://img.shields.io/badge/version-1.3-blue)
+![Version](https://img.shields.io/badge/version-1.3.2-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 ![Chrome](https://img.shields.io/badge/platform-Chrome%20%7C%20Firefox%20%7C%20Edge%20%7C%20Brave%20%7C%20Opera-orange)
 
@@ -85,6 +85,30 @@
 
 ---
 
+## Screenshots
+
+| Inventory View | Doppler Detection |
+|:-:|:-:|
+| ![Inventory](https://rftwlk.com/ss-inventory.png) | ![Dopplers](https://rftwlk.com/ss-dopplers-v12.png) |
+
+| Trade Offer PnL | Incoming Trade PnL |
+|:-:|:-:|
+| ![Trade](https://rftwlk.com/ss-tradeoffer.png) | ![Incoming](https://rftwlk.com/ss-tradepnl-v12.png) |
+
+| Blue Gem + Stickers | Case Opening Stats |
+|:-:|:-:|
+| ![Blue Gem](https://rftwlk.com/ss-bluegem-v12.png) | ![Case Stats](https://rftwlk.com/ss-casestats-v12.png) |
+
+| Portfolio Tracker | Portfolio Item Detail |
+|:-:|:-:|
+| ![Portfolio](https://rftwlk.com/ss-portfolio-v13.png) | ![Item Detail](https://rftwlk.com/ss-portfolio-item-v13.png) |
+
+| Settings | Features |
+|:-:|:-:|
+| ![Settings](https://rftwlk.com/ss-popup-v12.png) | ![Features](https://rftwlk.com/ss-features-v12.png) |
+
+---
+
 ## Installation
 
 ### Chrome Web Store
@@ -127,6 +151,14 @@
 ---
 
 ## Changelog
+
+### v1.3.2
+- **StatTrak and Souvenir labels** - ST/SV prefix shown on all items across inventory, trade offers, and incoming trades
+- **Charm template display** - Shows paintindex on charm items in inventory and trade pages
+- **Improved settings import** - Shows fetch progress and error details
+
+### v1.3.1
+- **Fix** - Portfolio tracker now correctly scopes to your own inventory only
 
 ### v1.3
 - **Portfolio Tracker** - Track your inventory value over time with interactive charts, per-item price history, sparkline trends, time ranges, item detail view with skin images, and data export/import
